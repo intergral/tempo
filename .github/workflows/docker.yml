@@ -38,7 +38,8 @@ jobs:
         runner_arch: [ { runner: ubuntu-24.04, arch: amd64 } ]
     runs-on: ${{ matrix.runner_arch.runner }}
     permissions:
-      id-token: write
+      contents: read
+      packages: write
     env:
       TAG: ${{ needs.get-tag.outputs.tag }}
     steps:
@@ -57,16 +58,19 @@ jobs:
       - name: docker-build
         run: |
           TAG_ARCH="$TAG-${{ matrix.runner_arch.arch }}"
-          docker build --provenance false --platform linux/${{ matrix.runner_arch.arch }} -f cmd/${{ matrix.component }}/Dockerfile -t grafana/${{ matrix.component }}:$TAG_ARCH .
+          docker build --provenance false --platform linux/${{ matrix.runner_arch.arch }} -f cmd/${{ matrix.component }}/Dockerfile -t ghcr.io/${{ github.repository_owner }}/${{ matrix.component }}:$TAG_ARCH .
 
-      # Commented out for fork - no DockerHub credentials
-      # - name: Login to DockerHub
-      #   uses: grafana/shared-workflows/actions/dockerhub-login@081a366728379fd0426b9cfef190e9a21c2d5418 # dockerhub-login/v1.0.3
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      # - name: docker-push
-      #   run: |
-      #     TAG_ARCH="$TAG-${{ matrix.runner_arch.arch }}"
-      #     docker push grafana/${{ matrix.component }}:$TAG_ARCH
+      - name: docker-push
+        run: |
+          TAG_ARCH="$TAG-${{ matrix.runner_arch.arch }}"
+          docker push ghcr.io/${{ github.repository_owner }}/${{ matrix.component }}:$TAG_ARCH
 
   # Disabled for fork - requires pushed images
   # manifest:
