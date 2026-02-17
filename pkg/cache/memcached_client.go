@@ -123,17 +123,42 @@ func NewMemcachedClient(cfg MemcachedClientConfig, name string, r prometheus.Reg
 		"name": name,
 	}, r))
 
-	dialTimeout := net.DialTimeout
+	// Use modern net.Dialer with DialContext for dual-stack support (Happy Eyeballs RFC 8305)
+	// This allows both IPv4 and IPv6 to be tried in parallel, which is essential for
+	// IPv6-only pods connecting to dual-stack memcached servers.
+	baseDialer := &net.Dialer{
+		Timeout:   cfg.Timeout,
+		KeepAlive: 30 * time.Second,
+	}
+
+	dialTimeout := func(network string, address string, timeout time.Duration) (net.Conn, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		return baseDialer.DialContext(ctx, network, address)
+	}
+
 	if cfg.TLSEnabled {
-		cfg, err := cfg.TLS.GetTLSConfig()
+		tlsCfg, err := cfg.TLS.GetTLSConfig()
 		if err != nil {
 			level.Error(logger).Log("msg", "couldn't create TLS configuration", "err", err)
 		} else {
 			dialTimeout = func(network string, address string, timeout time.Duration) (net.Conn, error) {
-				base := new(net.Dialer)
-				base.Timeout = timeout
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				defer cancel()
 
-				return tls.DialWithDialer(base, network, address, cfg)
+				// Use DialContext for dual-stack support even with TLS
+				conn, err := baseDialer.DialContext(ctx, network, address)
+				if err != nil {
+					return nil, err
+				}
+
+				// Wrap with TLS
+				tlsConn := tls.Client(conn, tlsCfg)
+				if err := tlsConn.HandshakeContext(ctx); err != nil {
+					conn.Close()
+					return nil, err
+				}
+				return tlsConn, nil
 			}
 		}
 	}
